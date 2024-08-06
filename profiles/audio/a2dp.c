@@ -326,6 +326,8 @@ static int error_to_errno(struct avdtp_error *err)
 	case EHOSTDOWN:
 	case ECONNABORTED:
 	case EBADE:
+	case ECONNREFUSED:
+	case EACCES:
 		return -perr;
 	default:
 		/*

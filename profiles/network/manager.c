@@ -158,7 +158,7 @@ static int network_init(void)
 {
 	int err;
 
-	read_config(CONFIGDIR "/network.conf");
+	read_config("/etc/network.conf");
 
 	err = bnep_init();
 	if (err) {

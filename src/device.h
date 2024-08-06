@@ -209,3 +209,5 @@ void btd_device_foreach_ad(struct btd_device *dev, bt_device_ad_func_t func,
 void btd_device_set_conn_param(struct btd_device *device, uint16_t min_interval,
 					uint16_t max_interval, uint16_t latency,
 					uint16_t timeout);
+bool device_get_svc_refreshed(struct btd_device *device);
+void device_set_reason(struct btd_device *device, uint8_t bdaddr_type, int16_t reason);

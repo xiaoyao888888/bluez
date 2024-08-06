@@ -1458,7 +1458,7 @@ static uint8_t player_get_status(struct avrcp_player *player)
 	const char *value;
 
 	if (player == NULL)
-		return AVRCP_PLAY_STATUS_STOPPED;
+		return AVRCP_PLAY_STATUS_PLAYING;
 
 	value = player->cb->get_status(player->user_data);
 	if (value == NULL)
@@ -1625,6 +1625,8 @@ static uint8_t avrcp_handle_register_notification(struct avrcp *session,
 	if (len != 5)
 		goto err;
 
+	DBG("supported_events: 0x%x, event: 0x%x(0x%x)\n", session->supported_events, 1 << pdu->params[0], pdu->params[0]);
+
 	/* Check if event is supported otherwise reject */
 	if (!(session->supported_events & (1 << pdu->params[0])))
 		goto err;
@@ -1658,6 +1660,7 @@ static uint8_t avrcp_handle_register_notification(struct avrcp *session,
 		break;
 	case AVRCP_EVENT_VOLUME_CHANGED:
 		volume = media_transport_get_device_volume(dev);
+		DBG("volume: %d");
 		if (volume < 0)
 			goto err;
 
@@ -3979,7 +3982,7 @@ static gboolean avrcp_get_capabilities_resp(struct avctp *conn, uint8_t code,
 		uint8_t event = pdu->params[1 + count];
 
 		events |= (1 << event);
-
+		DBG("count: %d, event: 0x%x\n", count, event);
 		switch (event) {
 		case AVRCP_EVENT_STATUS_CHANGED:
 		case AVRCP_EVENT_TRACK_CHANGED:
@@ -3991,6 +3994,9 @@ static gboolean avrcp_get_capabilities_resp(struct avctp *conn, uint8_t code,
 			/* These events above requires a player */
 			if (!session->controller ||
 						!session->controller->player)
+				break;
+
+			if (!btd_device_get_service(session->dev, A2DP_SOURCE_UUID))
 				break;
 			/* fall through */
 		case AVRCP_EVENT_VOLUME_CHANGED:
@@ -4152,6 +4158,7 @@ static void target_init(struct avrcp *session)
 		media_transport_update_device_volume(session->dev, init_volume);
 	}
 
+	/* These events below requires a player */
 	session->supported_events |= (1 << AVRCP_EVENT_STATUS_CHANGED) |
 				(1 << AVRCP_EVENT_TRACK_CHANGED) |
 				(1 << AVRCP_EVENT_TRACK_REACHED_START) |
@@ -4232,6 +4239,10 @@ static void session_init_control(struct avrcp *session)
 
 	if (btd_device_get_service(session->dev, AVRCP_REMOTE_UUID) != NULL)
 		target_init(session);
+
+	//Force supported volume change
+	session->supported_events |=
+				(1 << AVRCP_EVENT_VOLUME_CHANGED);
 }
 
 static void controller_destroy(struct avrcp *session)
@@ -4517,6 +4528,8 @@ static int avrcp_event(struct avrcp *session, uint8_t id, const void *data)
 	uint16_t size;
 	int err;
 
+	DBG("registered_events = 0x%x:0x%x", session->registered_events, 1 << id);
+
 	/* Verify that the event is registered */
 	if (!(session->registered_events & (1 << id)))
 		return -ENOENT;
@@ -4579,8 +4592,8 @@ int avrcp_set_volume(struct btd_device *dev, int8_t volume, bool notify)
 		return -ENOTCONN;
 
 	if (notify) {
-		if (!session->target)
-			return -ENOTSUP;
+		//if (!session->target)
+		//	return -ENOTSUP;
 		return avrcp_event(session, AVRCP_EVENT_VOLUME_CHANGED,
 								&volume);
 	}
@@ -4695,7 +4708,7 @@ static int avrcp_target_server_probe(struct btd_profile *p,
 		return -EPROTONOSUPPORT;
 
 done:
-	record = avrcp_tg_record(server->browsing);
+	record = avrcp_ct_record(server->browsing);
 	if (!record) {
 		error("Unable to allocate new service record");
 		avrcp_target_server_remove(p, adapter);
@@ -4708,7 +4721,7 @@ done:
 		sdp_record_free(record);
 		return -1;
 	}
-	server->tg_record_id = record->handle;
+	server->ct_record_id = record->handle;
 
 	return 0;
 }
@@ -4778,7 +4791,7 @@ static int avrcp_controller_server_probe(struct btd_profile *p,
 		return -EPROTONOSUPPORT;
 
 done:
-	record = avrcp_ct_record(server->browsing);
+	record = avrcp_tg_record(server->browsing);
 	if (!record) {
 		error("Unable to allocate new service record");
 		avrcp_controller_server_remove(p, adapter);
@@ -4791,7 +4804,7 @@ done:
 		sdp_record_free(record);
 		return -1;
 	}
-	server->ct_record_id = record->handle;
+	server->tg_record_id = record->handle;
 
 	return 0;
 }

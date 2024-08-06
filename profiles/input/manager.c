@@ -80,7 +80,7 @@ static int input_init(void)
 	GKeyFile *config;
 	GError *err = NULL;
 
-	config = load_config_file(CONFIGDIR "/input.conf");
+	config = load_config_file("/etc/input.conf");
 	if (config) {
 		int idle_timeout;
 		gboolean uhid_enabled, classic_bonded_only, auto_sec;

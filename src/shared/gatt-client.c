@@ -1755,6 +1755,7 @@ static unsigned int register_notify(struct bt_gatt_client *client,
 {
 	struct notify_data *notify_data;
 	struct notify_chrc *chrc = NULL;
+	DBG(client, "client: %p", client);
 
 	/* Check if a characteristic ref count has been started already */
 	chrc = queue_find(client->notify_chrcs, match_notify_chrc_value_handle,
@@ -1885,6 +1886,7 @@ static void service_changed_complete(struct discovery_op *op, bool success,
 	uint16_t start_handle = op->start;
 	uint16_t end_handle = op->end;
 	const struct queue_entry *entry;
+	DBG(client, "service_changed_complete");
 
 	client->in_svc_chngd = false;
 
@@ -2069,6 +2071,7 @@ static void init_complete(struct discovery_op *op, bool success,
 							uint8_t att_ecode)
 {
 	struct bt_gatt_client *client = op->client;
+	DBG(client, "init_complete");
 
 	client->in_init = false;
 
@@ -2649,6 +2652,7 @@ static void cancel_pending(void *data)
 
 bool bt_gatt_client_cancel_all(struct bt_gatt_client *client)
 {
+	DBG(client, "client: %p", client);
 	if (!client || !client->att)
 		return false;
 

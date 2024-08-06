@@ -153,6 +153,9 @@ struct btd_opts {
 	struct btd_advmon_opts	advmon;
 
 	struct btd_csis csis;
+
+	char ble_name[32];
+	bool ssp;
 };
 
 extern struct btd_opts btd_opts;

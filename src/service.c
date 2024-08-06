@@ -88,7 +88,7 @@ static void change_state(struct btd_service *service, btd_service_state_t state,
 	service->err = err;
 
 	ba2str(device_get_address(service->device), addr);
-	DBG("%p: device %s profile %s state changed: %s -> %s (%d)", service,
+	error("%p: device %s profile %s state changed: %s -> %s (%d)", service,
 					addr, service->profile->name,
 					state2str(old), state2str(state), err);
 
@@ -265,6 +265,8 @@ int btd_service_connect(struct btd_service *service)
 		return -ECONNABORTED;
 	}
 
+	ba2str(device_get_address(service->device), addr);
+	error("%s profile connect for %s: %s", profile->name, addr, profile->remote_uuid);
 	err = profile->connect(service);
 	if (err == 0) {
 		service->initiator = true;
@@ -284,6 +286,8 @@ int btd_service_disconnect(struct btd_service *service)
 	struct btd_profile *profile = service->profile;
 	char addr[18];
 	int err;
+	error("%s profile disconnect for %s: %p", profile->name, addr,
+								profile->disconnect);
 
 	if (!profile->disconnect)
 		return -ENOTSUP;

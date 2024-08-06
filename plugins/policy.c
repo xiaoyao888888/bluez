@@ -59,7 +59,7 @@ static const char *default_reconnect[] = {
 			A2DP_SINK_UUID, NULL };
 static char **reconnect_uuids = NULL;
 
-static const size_t default_attempts = 7;
+static const size_t default_attempts = 0;
 static size_t reconnect_attempts = 0;
 
 static const int default_intervals[] = { 1, 2, 4, 8, 16, 32, 64 };
@@ -638,6 +638,8 @@ static void service_cb(struct btd_service *service,
 	struct btd_profile *profile = btd_service_get_profile(service);
 	struct reconnect_data *reconnect;
 
+	error("uuid: %s, %d -> %d", profile->remote_uuid, old_state, new_state);
+
 	if (g_str_equal(profile->remote_uuid, A2DP_SINK_UUID))
 		sink_cb(service, old_state, new_state);
 	else if (g_str_equal(profile->remote_uuid, A2DP_SOURCE_UUID))
@@ -745,7 +747,8 @@ static void disconnect_cb(struct btd_device *dev, uint8_t reason)
 {
 	struct reconnect_data *reconnect;
 
-	DBG("reason %u", reason);
+	error("reason %u", reason);
+	return;
 
 	/* Only attempt reconnect for the following reasons */
 	if (reason != MGMT_DEV_DISCONN_TIMEOUT &&
@@ -805,6 +808,7 @@ static void conn_fail_cb(struct btd_device *dev, uint8_t status)
 	struct reconnect_data *reconnect;
 
 	DBG("status %u", status);
+	return;
 
 	reconnect = reconnect_find(dev);
 	if (!reconnect || !reconnect->reconnect)

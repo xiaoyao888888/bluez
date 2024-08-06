@@ -665,7 +665,7 @@ static void connect_cb(GIOChannel *io, GError *gerr, gpointer user_data)
 		return;
 	}
 
-	DBG("New incoming %s ATT connection", dst_type == BDADDR_BREDR ?
+	error("New incoming %s ATT connection", dst_type == BDADDR_BREDR ?
 							"BR/EDR" : "LE");
 
 	adapter = adapter_find(&src);
@@ -692,7 +692,12 @@ static void gap_device_name_read_cb(struct gatt_db_attribute *attrib,
 
 	DBG("GAP Device Name read request\n");
 
-	device_name = btd_adapter_get_name(database->adapter);
+	if (btd_opts.ble_name[0])
+		device_name = btd_opts.ble_name;
+	else
+		device_name = btd_adapter_get_name(database->adapter);
+
+	error("GAP Device Name read request: %s|%s\n", device_name, btd_adapter_get_name(database->adapter));
 	len = strlen(device_name);
 
 	if (offset > len) {
@@ -2985,9 +2990,22 @@ static void property_changed_cb(GDBusProxy *proxy, const char *name,
 	DBusMessageIter array;
 	uint8_t *value = NULL;
 	int len = 0;
+	error("name: %s, svc_c: %p", name, chrc->service->app->database->svc_chngd);
 
-	if (strcmp(name, "Value"))
+	if (strcmp(name, "Value") && strcmp(name, "ServiceChanged"))
 		return;
+
+	if (!strcmp(name, "ServiceChanged")) {
+		uint8_t val[4];
+		put_le16(0x0001, val);
+		put_le16(0xffff, val + 2);
+		if (!gatt_db_attribute_notify(chrc->service->app->database->svc_chngd,
+					      val, sizeof(val), NULL))
+			error("Failed to notify Service Changed");
+		else
+			error("send to notify Service Changed");
+		return;
+	}
 
 	if (iter) {
 		if (dbus_message_iter_get_arg_type(iter) != DBUS_TYPE_ARRAY) {
@@ -4032,6 +4050,7 @@ struct btd_gatt_database *btd_gatt_database_new(struct btd_adapter *adapter)
 	}
 
 bredr:
+#if 0
 	/* BR/EDR socket */
 	database->bredr_io = bt_io_listen(connect_cb, NULL, NULL, NULL, &gerr,
 					BT_IO_OPT_SOURCE_BDADDR, addr,
@@ -4044,6 +4063,7 @@ bredr:
 		g_error_free(gerr);
 		goto fail;
 	}
+#endif
 
 	if (g_dbus_register_interface(btd_get_dbus_connection(),
 						adapter_get_path(adapter),

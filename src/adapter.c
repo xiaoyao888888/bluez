@@ -784,7 +784,7 @@ static bool set_mode(struct btd_adapter *adapter, uint16_t opcode,
 		break;
 	}
 
-	DBG("sending set mode command for index %u", adapter->dev_id);
+	DBG("sending set mode command %d for index %u", opcode, adapter->dev_id);
 
 	data = g_new0(struct set_mode_data, 1);
 	data->adapter = adapter;
@@ -1009,6 +1009,7 @@ struct btd_device *btd_adapter_find_device(struct btd_adapter *adapter,
 	struct device_addr_type addr;
 	struct btd_device *device;
 	GSList *list;
+	char str[18];
 
 	if (!adapter)
 		return NULL;
@@ -1016,12 +1017,16 @@ struct btd_device *btd_adapter_find_device(struct btd_adapter *adapter,
 	bacpy(&addr.bdaddr, dst);
 	addr.bdaddr_type = bdaddr_type;
 
+	ba2str(dst, str);
+	error("addr: %s, type: %d", str, bdaddr_type);
+
 	list = g_slist_find_custom(adapter->devices, &addr,
 							device_addr_type_cmp);
 	if (!list)
 		return NULL;
 
 	device = list->data;
+	error("Got it");
 
 	/*
 	 * If we're looking up based on public address and the address
@@ -1089,6 +1094,25 @@ static bool is_supported_uuid(const uuid_t *uuid)
 	return true;
 }
 
+static bool uuid_to_string(const uint8_t uuid[16], char *dest, size_t dest_size)
+{
+	int n;
+
+	n = snprintf(dest, dest_size, "%02x%02x%02x%02x-%02x%02x-%02x%02x-"
+					"%02x%02x-%02x%02x%02x%02x%02x%02x",
+					uuid[0], uuid[1], uuid[2], uuid[3],
+					uuid[4], uuid[5],
+					uuid[6], uuid[7],
+					uuid[8], uuid[9],
+					uuid[10], uuid[11], uuid[12],
+					uuid[13], uuid[14], uuid[15]);
+
+	if (n < 0 || (size_t) n >= dest_size)
+		return false;
+
+	return true;
+}
+
 static void add_uuid_complete(uint8_t status, uint16_t length,
 					const void *param, void *user_data)
 {
@@ -1117,6 +1141,7 @@ static int add_uuid(struct btd_adapter *adapter, uuid_t *uuid, uint8_t svc_hint)
 	struct mgmt_cp_add_uuid cp;
 	uuid_t uuid128;
 	uint128_t uint128;
+	char buf[37];
 
 	if (!is_supported_uuid(uuid)) {
 		btd_warn(adapter->dev_id,
@@ -1129,8 +1154,9 @@ static int add_uuid(struct btd_adapter *adapter, uuid_t *uuid, uint8_t svc_hint)
 	ntoh128((uint128_t *) uuid128.value.uuid128.data, &uint128);
 	htob128(&uint128, (uint128_t *) cp.uuid);
 	cp.svc_hint = svc_hint;
+	uuid_to_string(cp.uuid, buf, sizeof(buf));
 
-	DBG("sending add uuid command for index %u", adapter->dev_id);
+	error("sending add uuid command for index %u uuid: %s", adapter->dev_id, buf);
 
 	if (mgmt_send(adapter->mgmt, MGMT_OP_ADD_UUID,
 				adapter->dev_id, sizeof(cp), &cp,
@@ -1171,6 +1197,7 @@ static int remove_uuid(struct btd_adapter *adapter, uuid_t *uuid)
 	struct mgmt_cp_remove_uuid cp;
 	uuid_t uuid128;
 	uint128_t uint128;
+	char buf[37];
 
 	if (!is_supported_uuid(uuid)) {
 		btd_warn(adapter->dev_id,
@@ -1183,7 +1210,9 @@ static int remove_uuid(struct btd_adapter *adapter, uuid_t *uuid)
 	ntoh128((uint128_t *) uuid128.value.uuid128.data, &uint128);
 	htob128(&uint128, (uint128_t *) cp.uuid);
 
-	DBG("sending remove uuid command for index %u", adapter->dev_id);
+	uuid_to_string(cp.uuid, buf, sizeof(buf));
+
+	error("sending remove uuid command for index %u: %s", adapter->dev_id, buf);
 
 	if (mgmt_send(adapter->mgmt, MGMT_OP_REMOVE_UUID,
 				adapter->dev_id, sizeof(cp), &cp,
@@ -1459,14 +1488,18 @@ struct btd_device *btd_adapter_get_device(struct btd_adapter *adapter,
 					uint8_t addr_type)
 {
 	struct btd_device *device;
+	char str[18];
 
 	if (!adapter)
 		return NULL;
 
+	ba2str(addr, str);
+	error("find start %s %d", str, addr_type);
+
 	device = btd_adapter_find_device(adapter, addr, addr_type);
 	if (device)
 		return device;
-
+	error("Don't found to create new");
 	return adapter_create_device(adapter, addr, addr_type);
 }
 
@@ -1908,7 +1941,7 @@ static bool start_discovery_timeout(gpointer user_data)
 	/* If we're doing filtered discovery, it must be quickly restarted */
 	adapter->no_scan_restart_delay = !!adapter->current_discovery_filter;
 
-	DBG("adapter->current_discovery_filter == %d",
+	error("adapter->current_discovery_filter == %d",
 	    !!adapter->current_discovery_filter);
 
 	new_type = get_scan_type(adapter);
@@ -1986,7 +2019,7 @@ static bool start_discovery_timeout(gpointer user_data)
 static void trigger_start_discovery(struct btd_adapter *adapter, guint delay)
 {
 
-	DBG("");
+	error("");
 
 	cancel_passive_scanning(adapter);
 
@@ -2060,7 +2093,7 @@ static void suspend_discovery(struct btd_adapter *adapter)
 
 static void resume_discovery(struct btd_adapter *adapter)
 {
-	DBG("");
+	error("");
 
 	adapter->discovery_suspended = false;
 
@@ -3643,7 +3676,7 @@ struct device_connect_data {
 
 static void device_browse_cb(struct btd_device *dev, int err, void *user_data)
 {
-	DBG("err %d (%s)", err, strerror(-err));
+	error("err %d (%s)", err, strerror(-err));
 
 	if (!err)
 		btd_device_connect_services(dev, NULL);
@@ -3656,7 +3689,7 @@ static void device_connect_cb(GIOChannel *io, GError *gerr, gpointer user_data)
 	struct btd_device *device;
 	const char *path;
 
-	DBG("%s", gerr ? gerr->message : "");
+	error("connected remote device (%s)", gerr ? gerr->message : "successful");
 
 	if (gerr)
 		goto failed;
@@ -4256,7 +4289,7 @@ static void set_privacy_complete(uint8_t status, uint16_t length,
 		return;
 	}
 
-	DBG("Successfuly set privacy for index %u", adapter->dev_id);
+	error("Successfuly set privacy for index %u", adapter->dev_id);
 }
 
 static int set_privacy(struct btd_adapter *adapter, uint8_t privacy)
@@ -4274,8 +4307,8 @@ static int set_privacy(struct btd_adapter *adapter, uint8_t privacy)
 		}
 	}
 
-	DBG("sending set privacy command for index %u", adapter->dev_id);
-	DBG("setting privacy mode 0x%02x for index %u", cp.privacy,
+	error("sending set privacy command for index %u", adapter->dev_id);
+	error("setting privacy mode 0x%02x for index %u", cp.privacy,
 							adapter->dev_id);
 
 	if (mgmt_send(adapter->mgmt, MGMT_OP_SET_PRIVACY,
@@ -5455,13 +5488,13 @@ void adapter_connect_list_remove(struct btd_adapter *adapter,
 		return;
 
 	if (!g_slist_find(adapter->connect_list, device)) {
-		DBG("device %s is not on the list, ignoring",
+		error("device %s is not on the list, ignoring",
 						device_get_path(device));
 		return;
 	}
 
 	adapter->connect_list = g_slist_remove(adapter->connect_list, device);
-	DBG("%s removed from %s's connect_list", device_get_path(device),
+	error("%s removed from %s's connect_list", device_get_path(device),
 							adapter->system_name);
 
 	if (!adapter->connect_list) {
@@ -7857,6 +7890,7 @@ int btd_adapter_restore_powered(struct btd_adapter *adapter)
 	bool powered;
 
 	powered = btd_adapter_get_powered(adapter);
+	error("powered %d, 0x%x", powered, adapter->current_settings);
 	if (adapter->power_state == ADAPTER_POWER_STATE_OFF_BLOCKED &&
 	    rfkill_get_blocked(adapter->dev_id) == 0) {
 		adapter_set_power_state(adapter,
@@ -7868,6 +7902,7 @@ int btd_adapter_restore_powered(struct btd_adapter *adapter)
 	if (powered)
 		return 0;
 
+	error("set_mode MGMT_OP_SET_POWERED");
 	set_mode(adapter, MGMT_OP_SET_POWERED, 0x01);
 
 	return 0;
@@ -8330,6 +8365,7 @@ static void bonding_complete(struct btd_adapter *adapter,
 					uint8_t addr_type, uint8_t status)
 {
 	struct btd_device *device;
+	error("");
 
 	if (status == 0)
 		device = btd_adapter_get_device(adapter, bdaddr, addr_type);
@@ -8355,7 +8391,7 @@ static void bonding_attempt_complete(struct btd_adapter *adapter,
 	char addr[18];
 
 	ba2str(bdaddr, addr);
-	DBG("hci%u bdaddr %s type %u status 0x%x", adapter->dev_id, addr,
+	error("hci%u bdaddr %s type %u status 0x%x", adapter->dev_id, addr,
 							addr_type, status);
 
 	if (status == 0)
@@ -8400,7 +8436,7 @@ static void pair_device_complete(uint8_t status, uint16_t length,
 	struct pair_device_data *data = user_data;
 	struct btd_adapter *adapter = data->adapter;
 
-	DBG("%s (0x%02x)", mgmt_errstr(status), status);
+	error("%s (0x%02x)", mgmt_errstr(status), status);
 
 	/* Workaround for a kernel bug
 	 *
@@ -8444,7 +8480,7 @@ int adapter_bonding_attempt(struct btd_adapter *adapter, const bdaddr_t *bdaddr,
 	unsigned int id;
 
 	ba2str(bdaddr, addr);
-	DBG("hci%u bdaddr %s type %d io_cap 0x%02x",
+	error("hci%u bdaddr %s type %d io_cap 0x%02x",
 				adapter->dev_id, addr, addr_type, io_cap);
 
 	/* Reset the pincode_requested flag for a new bonding attempt. */
@@ -8497,12 +8533,13 @@ static void dev_disconnected(struct btd_adapter *adapter,
 
 	ba2str(&addr->bdaddr, dst);
 
-	DBG("Device %s disconnected, reason %u", dst, reason);
+	error("Device %s disconnected, reason %u", dst, reason);
 
 	device = btd_adapter_find_device(adapter, &addr->bdaddr, addr->type);
 	if (device) {
 		adapter_remove_connection(adapter, device, addr->type);
 		disconnect_notify(device, reason);
+		device_set_reason(device, addr->type, reason);
 	}
 
 	bonding_attempt_complete(adapter, &addr->bdaddr, addr->type,
@@ -8568,6 +8605,7 @@ static void auth_failed_callback(uint16_t index, uint16_t length,
 {
 	const struct mgmt_ev_auth_failed *ev = param;
 	struct btd_adapter *adapter = user_data;
+	error("");
 
 	if (length < sizeof(*ev)) {
 		btd_error(adapter->dev_id, "Too small auth failed mgmt event");
@@ -8641,8 +8679,8 @@ static void new_link_key_callback(uint16_t index, uint16_t length,
 
 	ba2str(&addr->bdaddr, dst);
 
-	DBG("hci%u new key for %s type %u pin_len %u store_hint %u",
-		adapter->dev_id, dst, ev->key.type, ev->key.pin_len,
+	error("hci%u new key for %s|%d type %u pin_len %u store_hint %u",
+		adapter->dev_id, dst, addr->type, ev->key.type, ev->key.pin_len,
 		ev->store_hint);
 
 	if (ev->key.pin_len > 16) {
@@ -8728,6 +8766,7 @@ static void store_longtermkey(struct btd_adapter *adapter, const bdaddr_t *peer,
 				uint8_t enc_size, uint16_t ediv,
 				uint64_t rand)
 {
+	error("central: %d", central);
 	if (central != 0x00 && central != 0x01) {
 		error("Unsupported LTK type %u", central);
 		return;
@@ -8767,8 +8806,8 @@ static void new_long_term_key_callback(uint16_t index, uint16_t length,
 
 	ba2str(&addr->bdaddr, dst);
 
-	DBG("hci%u new LTK for %s type %u enc_size %u",
-		adapter->dev_id, dst, ev->key.type, ev->key.enc_size);
+	error("hci%u new LTK for %s|%d type %u enc_size %u, store_hint: %d",
+		adapter->dev_id, dst, addr->type, ev->key.type, ev->key.enc_size, !!ev->store_hint);
 
 	device = btd_adapter_get_device(adapter, &addr->bdaddr, addr->type);
 	if (!device) {
@@ -8831,7 +8870,7 @@ static void new_csrk_callback(uint16_t index, uint16_t length,
 
 	ba2str(&addr->bdaddr, dst);
 
-	DBG("hci%u new CSRK for %s type %u", adapter->dev_id, dst,
+	error("hci%u new CSRK for %s|%d type %u", adapter->dev_id, dst, addr->type,
 								ev->key.type);
 
 	device = btd_adapter_get_device(adapter, &addr->bdaddr, addr->type);
@@ -8906,7 +8945,7 @@ static void new_irk_callback(uint16_t index, uint16_t length,
 	ba2str(&addr->bdaddr, dst);
 	ba2str(&ev->rpa, rpa);
 
-	DBG("hci%u new IRK for %s RPA %s", adapter->dev_id, dst, rpa);
+	error("hci%u new IRK for %s RPA %s", adapter->dev_id, dst, rpa);
 
 	if (bacmp(&ev->rpa, BDADDR_ANY)) {
 		device = btd_adapter_get_device(adapter, &ev->rpa,
@@ -9430,7 +9469,7 @@ static void connected_callback(uint16_t index, uint16_t length,
 
 	ba2str(&ev->addr.bdaddr, addr);
 
-	DBG("hci%u device %s connected eir_len %u", index, addr, eir_len);
+	error("hci%u device %s connected eir_len %u", index, addr, eir_len);
 
 	device = btd_adapter_get_device(adapter, &ev->addr.bdaddr,
 								ev->addr.type);
@@ -9569,7 +9608,7 @@ static void connect_failed_callback(uint16_t index, uint16_t length,
 
 	ba2str(&ev->addr.bdaddr, addr);
 
-	DBG("hci%u %s status %u", index, addr, ev->status);
+	error("hci%u %s status %u", index, addr, ev->status);
 
 	device = btd_adapter_find_device(adapter, &ev->addr.bdaddr,
 								ev->addr.type);
@@ -9618,6 +9657,8 @@ static void remove_keys(struct btd_adapter *adapter,
 	create_filename(filename, PATH_MAX, "/%s/%s/info",
 			btd_adapter_get_storage_dir(adapter), device_addr);
 
+	error("filename: %s, device_addr: %s", filename, device_addr);
+
 	key_file = g_key_file_new();
 	if (!g_key_file_load_from_file(key_file, filename, 0, &gerr)) {
 		error("Unable to load key file from %s: (%s)", filename,
@@ -9660,7 +9701,7 @@ static void unpaired_callback(uint16_t index, uint16_t length,
 
 	ba2str(&ev->addr.bdaddr, addr);
 
-	DBG("hci%u addr %s", index, addr);
+	error("hci%u addr %s, type: %d", index, addr, ev->addr.type);
 
 	device = btd_adapter_find_device(adapter, &ev->addr.bdaddr,
 								ev->addr.type);
@@ -9672,6 +9713,16 @@ static void unpaired_callback(uint16_t index, uint16_t length,
 
 	remove_keys(adapter, device, ev->addr.type);
 	device_set_unpaired(device, ev->addr.type);
+
+	/*
+	if (ev->addr.type == BDADDR_BREDR)
+		device->bredr_state.bonded = false;
+	else
+		device->le_state.bonded = false;
+
+	if (!device->bredr_state.bonded && !device->le_state.bonded)
+		btd_device_set_temporary(device, true);
+	*/
 }
 
 static void clear_devices_complete(uint8_t status, uint16_t length,
@@ -10223,7 +10274,7 @@ static void read_info_complete(uint8_t status, uint16_t length,
 			set_mode(adapter, MGMT_OP_SET_LE, 0x01);
 		if (missing_settings & MGMT_SETTING_BREDR)
 			set_mode(adapter, MGMT_OP_SET_BREDR, 0x01);
-		if (missing_settings & MGMT_SETTING_SSP)
+		if (missing_settings & MGMT_SETTING_SSP && btd_opts.ssp)
 			set_mode(adapter, MGMT_OP_SET_SSP, 0x01);
 		break;
 	case BT_MODE_BREDR:
@@ -10235,7 +10286,7 @@ static void read_info_complete(uint8_t status, uint16_t length,
 
 		if (missing_settings & MGMT_SETTING_BREDR)
 			set_mode(adapter, MGMT_OP_SET_BREDR, 0x01);
-		if (missing_settings & MGMT_SETTING_SSP)
+		if (missing_settings & MGMT_SETTING_SSP && btd_opts.ssp)
 			set_mode(adapter, MGMT_OP_SET_SSP, 0x01);
 		if (adapter->current_settings & MGMT_SETTING_LE)
 			set_mode(adapter, MGMT_OP_SET_LE, 0x00);
@@ -10252,6 +10303,11 @@ static void read_info_complete(uint8_t status, uint16_t length,
 		if (adapter->current_settings & MGMT_SETTING_BREDR)
 			set_mode(adapter, MGMT_OP_SET_BREDR, 0x00);
 		break;
+	}
+
+	if (btd_opts.ssp == false) {
+		error("Disable SSP");
+		set_mode(adapter, MGMT_OP_SET_SSP, 0x00);
 	}
 
 	if (missing_settings & MGMT_SETTING_SECURE_CONN)
@@ -10749,6 +10805,7 @@ static void read_version_complete(uint8_t status, uint16_t length,
 static void mgmt_debug(const char *str, void *user_data)
 {
 	DBG_IDX(0xffff, "%s", str);
+	//error("%s", str);
 }
 
 int adapter_init(void)

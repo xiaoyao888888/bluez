@@ -760,7 +760,7 @@ static bool parse_discoverable(DBusMessageIter *iter,
 	dbus_message_iter_get_basic(iter, &discoverable);
 
 	if (discoverable)
-		flags = BT_AD_FLAG_GENERAL;
+		flags = BT_AD_FLAG_GENERAL | BT_AD_FLAG_NO_BREDR;
 	else
 		flags = 0x00;
 

@@ -515,6 +515,7 @@ static int pincode_request_new(struct agent_request *req, dbus_bool_t secure)
 {
 	struct agent *agent = req->agent;
 	const char *path;
+	error("");
 
 	/* TODO: Add a new method or a new param to Agent interface to request
 		secure pin. */

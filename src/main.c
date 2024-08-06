@@ -90,6 +90,8 @@ static const char *supported_options[] = {
 	"Testing",
 	"KernelExperimental",
 	"RemoteNameRequestRetryDelay",
+	"BleName",
+	"SSP",
 	NULL
 };
 
@@ -252,7 +254,7 @@ static GKeyFile *load_config(const char *name)
 			else
 				len = strlen(configdir);
 		} else {
-			configdir = CONFIGDIR;
+			configdir = "/etc"; //CONFIGDIR;
 			len = strlen(configdir);
 		}
 
@@ -847,8 +849,22 @@ static void parse_privacy(GKeyFile *config)
 {
 	char *str = NULL;
 
+	if (parse_config_string(config, "General", "SSP", &str) &&
+		!strcmp(str, "off"))
+		btd_opts.ssp = false;
+	else
+		btd_opts.ssp = true;
+
+	if (!parse_config_string(config, "General", "BleName", &str)) {
+		DBG("No ble name");
+	} else {
+		memset(btd_opts.ble_name, 0, sizeof(btd_opts.ble_name));
+		strcpy(btd_opts.ble_name, str);
+		error("ble_name: %s, key_str: %s", btd_opts.ble_name, str);
+	}
+
 	if (!parse_config_string(config, "General", "Privacy", &str)) {
-		btd_opts.privacy = 0x00;
+		btd_opts.privacy = 0x00;//test
 		btd_opts.device_privacy = true;
 		return;
 	}
@@ -878,6 +894,8 @@ static void parse_privacy(GKeyFile *config)
 		DBG("Invalid privacy option: %s", str);
 		btd_opts.privacy = 0x00;
 	}
+
+	error("Privacy %s, %d", str, btd_opts.privacy);
 
 	g_free(str);
 }
@@ -1006,6 +1024,7 @@ static void parse_general(GKeyFile *config)
 {
 	parse_config_string(config, "General", "Name", &btd_opts.name);
 	parse_config_hex(config, "General", "Class", &btd_opts.class);
+	error("btd_opts.class: 0x%x", btd_opts.class);
 	parse_config_u32(config, "General", "DiscoverableTimeout",
 						&btd_opts.discovto,
 						0, UINT32_MAX);

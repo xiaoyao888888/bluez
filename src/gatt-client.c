@@ -791,6 +791,7 @@ static gboolean characteristic_get_notifying(const GDBusPropertyTable *property,
 {
 	struct characteristic *chrc = data;
 	dbus_bool_t notifying = chrc->notifying ? TRUE : FALSE;
+	error("");
 
 	dbus_message_iter_append_basic(iter, DBUS_TYPE_BOOLEAN, &notifying);
 
@@ -1383,7 +1384,7 @@ static void notify_client_disconnect(DBusConnection *conn, void *user_data)
 	struct notify_client *client = user_data;
 	struct characteristic *chrc = client->chrc;
 
-	DBG("owner %s", client->owner);
+	error("owner %s", client->owner);
 
 	queue_remove(chrc->notify_clients, client);
 	queue_remove(chrc->service->client->all_notify_clients, client);
@@ -1432,6 +1433,7 @@ static void notify_cb(uint16_t value_handle, const uint8_t *value,
 	struct async_dbus_op *op = user_data;
 	struct notify_client *client = op->data;
 	struct characteristic *chrc = client->chrc;
+	DBG("client: %p", client);
 
 	/*
 	 * Even if the value didn't change, we want to send a PropertiesChanged
@@ -1461,6 +1463,7 @@ static void register_notify_cb(uint16_t att_ecode, void *user_data)
 	struct async_dbus_op *op = user_data;
 	struct notify_client *client = op->data;
 	struct characteristic *chrc = client->chrc;
+	error("client: %p", client);
 
 	if (att_ecode) {
 		queue_remove(chrc->notify_clients, client);
@@ -1592,6 +1595,7 @@ static DBusMessage *characteristic_start_notify(DBusConnection *conn,
 	struct async_dbus_op *op;
 	struct notify_client *client;
 	struct btd_device *device = chrc->service->client->device;
+	error("");
 
 	if (device_is_disconnecting(device)) {
 		error("Device is disconnecting. StartNotify is not allowed.");
@@ -1615,6 +1619,7 @@ static DBusMessage *characteristic_start_notify(DBusConnection *conn,
 	client = notify_client_create(chrc, sender);
 	if (!client)
 		return btd_error_failed(msg, "Failed allocate notify session");
+	error("client: %p", client);
 
 	queue_push_tail(chrc->notify_clients, client);
 	queue_push_tail(chrc->service->client->all_notify_clients, client);
@@ -1667,6 +1672,7 @@ static DBusMessage *characteristic_stop_notify(DBusConnection *conn,
 	struct bt_gatt_client *gatt = chrc->service->client->gatt;
 	const char *sender = dbus_message_get_sender(msg);
 	struct notify_client *client;
+	error("");
 
 	if (chrc->notify_io) {
 		destroy_sock(chrc, chrc->notify_io->io);
@@ -1675,6 +1681,7 @@ static DBusMessage *characteristic_stop_notify(DBusConnection *conn,
 
 	client = queue_remove_if(chrc->notify_clients, match_notify_sender,
 							(void *) sender);
+	error("client: %p", client);
 	if (!client)
 		return btd_error_failed(msg, "No notify session started");
 
@@ -1771,7 +1778,7 @@ static void characteristic_free(void *data)
 static void att_exchange(uint16_t mtu, void *user_data)
 {
 	struct characteristic *chrc = user_data;
-
+	error("chrc->path %s", chrc->path);
 	g_dbus_emit_property_changed(btd_get_dbus_connection(), chrc->path,
 					GATT_CHARACTERISTIC_IFACE, "MTU");
 }
@@ -2222,7 +2229,8 @@ static void register_notify(void *data, void *user_data)
 	struct btd_gatt_client *client = user_data;
 	struct async_dbus_op *op;
 
-	DBG("Re-register subscribed notification client");
+	error("Dis-register subscribed notification client");
+	goto free;
 
 	op = new0(struct async_dbus_op, 1);
 	op->data = notify_client;
@@ -2238,6 +2246,7 @@ static void register_notify(void *data, void *user_data)
 
 	DBG("Failed to re-register notification client");
 
+free:
 	queue_remove(notify_client->chrc->notify_clients, notify_client);
 	queue_remove(client->all_notify_clients, notify_client);
 
@@ -2262,7 +2271,7 @@ void btd_gatt_client_ready(struct btd_gatt_client *client)
 
 	client->ready = true;
 
-	DBG("GATT client ready");
+	error("GATT client ready");
 
 	create_services(client);
 
@@ -2366,7 +2375,7 @@ void btd_gatt_client_connected(struct btd_gatt_client *client)
 		return;
 	}
 
-	DBG("Device connected.");
+	error("Device connected.");
 
 	bt_gatt_client_unref(client->gatt);
 	client->gatt = bt_gatt_client_clone(gatt);
@@ -2410,6 +2419,7 @@ void btd_gatt_client_service_removed(struct btd_gatt_client *client,
 static void clear_notify_id(void *data, void *user_data)
 {
 	struct notify_client *client = data;
+	error("");
 
 	client->notify_id = 0;
 }
@@ -2424,7 +2434,7 @@ void btd_gatt_client_disconnected(struct btd_gatt_client *client)
 	if (!client || !client->gatt)
 		return;
 
-	DBG("Device disconnected. Cleaning up.");
+	error("Device disconnected. Cleaning up.");
 
 	queue_remove_all(client->ios, NULL, NULL, client_shutdown);
 

@@ -551,7 +551,7 @@ static bool can_write_data(struct io *io, void *user_data)
 	if (!op)
 		return false;
 
-	if (!bt_att_chan_write(chan, op->opcode, op->pdu, op->len)) {
+	if (bt_att_chan_write(chan, op->opcode, op->pdu, op->len) < 0) {
 		if (op->callback)
 			op->callback(BT_ATT_OP_ERROR_RSP, NULL, 0,
 							op->user_data);
@@ -1092,8 +1092,8 @@ static bool can_read_data(struct io *io, void *user_data)
 		/* For all other opcodes notify the upper layer of the PDU and
 		 * let them act on it.
 		 */
-		DBG(att, "(chan %p) ATT PDU received: 0x%02x", chan,
-							opcode);
+		//DBG(att, "(chan %p) ATT PDU received: 0x%02x", chan,
+		//					opcode);
 		handle_notify(chan, pdu, bytes_read);
 		break;
 	}
@@ -1425,7 +1425,7 @@ bool bt_att_set_mtu(struct bt_att *att, uint16_t mtu)
 
 	chan->mtu = mtu;
 	chan->buf = buf;
-
+	DBG(att, "chan->mtu %d, att mtu: %d", chan->mtu, att->mtu);
 	if (chan->mtu > att->mtu) {
 		att->mtu = chan->mtu;
 		queue_foreach(att->exchange_list, exchange_handler,
