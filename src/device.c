@@ -292,6 +292,7 @@ struct btd_device {
 	int8_t		volume;
 	uint16_t reason;
 	uint8_t update_addrtype;
+	bool duplicate;
 };
 
 static const uint16_t uuid_list[] = {
@@ -1049,6 +1050,8 @@ static gboolean dev_property_get_info(const GDBusPropertyTable *property,
 
 	if (dev->update_addrtype)
 		val |= (1 << 15);
+	if (dev->duplicate)
+		val |= (1 << 14);
 
 	error("val: 0x%x", val);
 	dbus_message_iter_append_basic(iter, DBUS_TYPE_INT16, &val);
@@ -3628,7 +3631,11 @@ void device_remove_connection(struct btd_device *device, uint8_t bdaddr_type,
 	DBusMessage *reply;
 	bool remove_device = false;
 	bool paired_status_updated = false;
-	error("con/dis msg: %p|%p", device->connect, device->disconnects);
+
+	error("con/dis msg: %p|%p %d|%d|%d|%d", device->connect, device->disconnects, bdaddr_type,
+			device->bredr_state.connected,
+			device->le_state.connected,
+			device_is_temporary(device));
 
 	if (!state->connected)
 		return;
@@ -3707,7 +3714,13 @@ void device_remove_connection(struct btd_device *device, uint8_t bdaddr_type,
 	if (device->bredr_state.connected || device->le_state.connected)
 		return;
 
-	device_update_last_seen(device, bdaddr_type, true);
+	//device_update_last_seen(device, bdaddr_type, true);
+	state->last_seen = time(NULL);
+	state->connectable = true;
+	if (device_is_temporary(device)) {
+		/* Restart temporary timer */
+		set_temporary_timer(device, 1);
+	}
 
 	g_slist_free_full(device->eir_uuids, g_free);
 	device->eir_uuids = NULL;
@@ -4743,6 +4756,11 @@ void device_set_class(struct btd_device *device, uint32_t class)
 						DEVICE_INTERFACE, "Icon");
 }
 
+void device_copy_addr(struct btd_device *device, const bdaddr_t *bdaddr)
+{
+	bacpy(&device->bdaddr, bdaddr);
+}
+
 void device_set_rpa(struct btd_device *device, bool value)
 {
 	device->rpa = value;
@@ -4869,6 +4887,9 @@ void device_merge_duplicate(struct btd_device *dev, struct btd_device *dup)
 	dev->vendor = dup->vendor;
 	dev->product = dup->product;
 	dev->version = dup->version;
+	dev->duplicate = true;
+	g_dbus_emit_property_changed(dbus_conn, dev->path,
+					DEVICE_INTERFACE, "INFO");
 }
 
 uint32_t btd_device_get_class(struct btd_device *device)
@@ -4998,7 +5019,7 @@ static void device_remove_stored(struct btd_device *device)
 
 void device_remove(struct btd_device *device, gboolean remove_stored)
 {
-	error("Removing device %s", device->path);
+	error("Removing device %s|%d", device->path, remove_stored);
 
 	if (device->auto_connect) {
 		device->disable_auto_connect = TRUE;
@@ -6686,6 +6707,7 @@ void device_set_paired(struct btd_device *dev, uint8_t bdaddr_type)
 void device_set_unpaired(struct btd_device *dev, uint8_t bdaddr_type)
 {
 	struct bearer_state *state = get_state(dev, bdaddr_type);
+	error("");
 
 	if (!state->paired)
 		return;
@@ -6704,10 +6726,11 @@ void device_set_unpaired(struct btd_device *dev, uint8_t bdaddr_type)
 	 * send any property signals or remove device.
 	 */
 	if (dev->bredr_state.paired != dev->le_state.paired) {
-		error("TODO disconnect only unpaired bearer if connected !!!");
+		error("TODO disconnect only unpaired bearer if connected %d|%d", state->connected, bdaddr_type);
 		/* TODO disconnect only unpaired bearer */
 		if (state->connected)
-			device_request_disconnect(dev, NULL);
+			device_request_disconnect_by_type(dev, NULL, bdaddr_type);
+			//device_request_disconnect(dev, NULL);
 
 		return;
 	}
@@ -6750,7 +6773,9 @@ void device_bonding_complete(struct btd_device *device, uint8_t bdaddr_type,
 	struct authentication_req *auth = device->authr;
 	struct bearer_state *state = get_state(device, bdaddr_type);
 
-	error("bonding %p status 0x%02x %d:%d", bonding, status, state->svc_resolved, state->paired);
+	error("bonding %p status 0x%02x %d:%d:%d:%d:%d", bonding, status,
+			bdaddr_type, state->svc_resolved, state->paired,
+			device->bredr_state.connected, device->le_state.connected);
 
 	if (auth && auth->agent)
 		agent_cancel(auth->agent);

@@ -741,6 +741,7 @@ static void set_mode_complete(uint8_t status, uint16_t length,
 static void remove_temporary_devices(struct btd_adapter *adapter)
 {
 	GSList *l, *next;
+	error("");
 
 	for (l = adapter->devices; l; l = next) {
 		struct btd_device *dev = l->data;
@@ -1747,6 +1748,7 @@ static void invalidate_rssi_and_tx_power(gpointer a)
 static void discovery_cleanup(struct btd_adapter *adapter, int timeout)
 {
 	GSList *l, *next;
+	error("");
 
 	adapter->discovery_type = 0x00;
 
@@ -1766,7 +1768,7 @@ static void discovery_cleanup(struct btd_adapter *adapter, int timeout)
 		struct btd_device *dev = l->data;
 
 		next = g_slist_next(l);
-
+		error("temp: %d", device_is_temporary(dev));
 		if (device_is_temporary(dev) && !device_is_connectable(dev)
 			&& !btd_device_is_connected(dev))
 			btd_adapter_remove_device(adapter, dev);
@@ -7004,7 +7006,7 @@ static void adapter_remove(struct btd_adapter *adapter)
 	GSList *l;
 	struct gatt_db *db;
 
-	DBG("Removing adapter %s", adapter->path);
+	error("Removing adapter %s", adapter->path);
 
 	g_slist_free(adapter->connect_list);
 	adapter->connect_list = NULL;
@@ -7535,7 +7537,7 @@ static void adapter_remove_connection(struct btd_adapter *adapter,
 {
 	bool remove_device = false;
 
-	DBG("");
+	error("bdaddr_type: %d", bdaddr_type);
 
 	if (!g_slist_find(adapter->connections, device)) {
 		btd_error(adapter->dev_id, "No matching connection for device");
@@ -7543,6 +7545,7 @@ static void adapter_remove_connection(struct btd_adapter *adapter,
 	}
 
 	device_remove_connection(device, bdaddr_type, &remove_device);
+	error("remove_device: %d", remove_device);
 
 	if (device_is_authenticating(device))
 		device_cancel_authentication(device, TRUE);
@@ -7556,7 +7559,7 @@ static void adapter_remove_connection(struct btd_adapter *adapter,
 	if (remove_device) {
 		const char *path = device_get_path(device);
 
-		DBG("Removing temporary device %s", path);
+		error("Removing temporary device %s", path);
 		btd_adapter_remove_device(adapter, device);
 	}
 }
@@ -9478,6 +9481,9 @@ static void connected_callback(uint16_t index, uint16_t length,
 				"Unable to get device object for %s", addr);
 		return;
 	}
+
+	//workround double device with some addr
+	device_copy_addr(device, &ev->addr.bdaddr);
 
 	memset(&eir_data, 0, sizeof(eir_data));
 	if (eir_len > 0)
