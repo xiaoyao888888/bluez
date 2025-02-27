@@ -1763,6 +1763,15 @@ static const char *proxy_address(GDBusProxy *proxy)
 	return addr;
 }
 
+static char pair_addr_type[10];
+static void pair_setup(DBusMessageIter *iter, void *user_data)
+{
+	const char *type = pair_addr_type;
+
+	bt_shell_printf("pair_setup %s\n", type);
+	dbus_message_iter_append_basic(iter, DBUS_TYPE_STRING, &type);
+}
+
 static void cmd_pair(int argc, char *argv[])
 {
 	GDBusProxy *proxy;
@@ -1771,7 +1780,13 @@ static void cmd_pair(int argc, char *argv[])
 	if (!proxy)
 		return bt_shell_noninteractive_quit(EXIT_FAILURE);
 
-	if (g_dbus_proxy_method_call(proxy, "Pair", NULL, pair_reply,
+	if (argc > 2) {
+		memset(pair_addr_type, 0, 10);
+		strcpy(pair_addr_type, argv[2]);
+	} else
+		strcpy(pair_addr_type, "bredr");
+
+	if (g_dbus_proxy_method_call(proxy, "Pair", pair_setup, pair_reply,
 							NULL, NULL) == FALSE) {
 		bt_shell_printf("Failed to pair\n");
 		return bt_shell_noninteractive_quit(EXIT_FAILURE);
@@ -2012,7 +2027,13 @@ static void cmd_connect(int argc, char *argv[])
 		return bt_shell_noninteractive_quit(EXIT_FAILURE);
 	}
 
-	if (g_dbus_proxy_method_call(proxy, "Connect", NULL, connect_reply,
+	if (argc > 2) {
+		memset(pair_addr_type, 0, 10);
+		strcpy(pair_addr_type, argv[2]);
+	} else
+		strcpy(pair_addr_type, "bredr");
+
+	if (g_dbus_proxy_method_call(proxy, "Connect", pair_setup, connect_reply,
 							proxy, NULL) == FALSE) {
 		bt_shell_printf("Failed to connect\n");
 		return bt_shell_noninteractive_quit(EXIT_FAILURE);
@@ -3122,7 +3143,7 @@ static const struct bt_shell_menu main_menu = {
 				"Scan for devices", scan_generator },
 	{ "info",         "[dev/set]",    cmd_info, "Device/Set information",
 							dev_set_generator },
-	{ "pair",         "[dev]",    cmd_pair, "Pair with device",
+	{ "pair",         "[dev] [type]",    cmd_pair, "Pair with device",
 							dev_generator },
 	{ "cancel-pairing",  "[dev]",    cmd_cancel_pairing,
 				"Cancel pairing with device", dev_generator },
@@ -3136,7 +3157,7 @@ static const struct bt_shell_menu main_menu = {
 								dev_generator },
 	{ "remove",       "<dev>",    cmd_remove, "Remove device",
 							dev_generator },
-	{ "connect",      "<dev>",    cmd_connect, "Connect device",
+	{ "connect",      "<dev> <type>",    cmd_connect, "Connect device",
 							dev_generator },
 	{ "disconnect",   "[dev]",    cmd_disconn, "Disconnect device",
 							dev_generator },
