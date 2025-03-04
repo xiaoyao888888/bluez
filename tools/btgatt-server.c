@@ -26,6 +26,8 @@
 #include "lib/hci_lib.h"
 #include "lib/l2cap.h"
 #include "lib/uuid.h"
+#include "lib/sdp.h"
+#include "lib/sdp_lib.h"
 
 #include "src/shared/mainloop.h"
 #include "src/shared/util.h"
@@ -35,12 +37,22 @@
 #include "src/shared/gatt-db.h"
 #include "src/shared/gatt-server.h"
 
+//#include "src/uuid-helper.h"
+#include "lib/mgmt.h"
+
+#include "src/shared/io.h"
+#include "src/shared/mgmt.h"
+//#include "src/shared/shell.h"
+
 #define UUID_GAP			0x1800
 #define UUID_GATT			0x1801
 #define UUID_HEART_RATE			0x180d
 #define UUID_HEART_RATE_MSRMT		0x2a37
 #define UUID_HEART_RATE_BODY		0x2a38
 #define UUID_HEART_RATE_CTRL		0x2a39
+
+#define UUID_WIFI			0x2222
+#define UUID_WIFI_CHR		0x3333
 
 #define ATT_CID 4
 
@@ -67,6 +79,9 @@ static const char test_device_name[] = "Very Long Test Device Name For Testing "
 				"ATT Protocol Operations On GATT Server";
 static bool verbose = false;
 
+static struct mgmt *mgmt = NULL;
+static uint16_t mgmt_index = MGMT_INDEX_NONE;
+
 struct server {
 	int fd;
 	struct bt_att *att;
@@ -82,11 +97,25 @@ struct server {
 	uint16_t hr_handle;
 	uint16_t hr_msrmt_handle;
 	uint16_t hr_energy_expended;
+
+	//wifi
+	uint16_t wifi_handle;
+	uint16_t wifi_chr_handle;
+	bool wifi_chngd_enabled;
+
 	bool hr_visible;
 	bool hr_msrmt_enabled;
 	int hr_ee_count;
 	unsigned int hr_timeout_id;
 };
+
+#define print(fmt, arg...) do { \
+		printf(fmt "\n", ## arg); \
+} while (0)
+
+#define error(fmt, arg...) do { \
+		printf(COLOR_RED fmt "\n" COLOR_OFF, ## arg); \
+} while (0)
 
 static void print_prompt(void)
 {
@@ -114,6 +143,53 @@ static void gatt_debug_cb(const char *str, void *user_data)
 	const char *prefix = user_data;
 
 	PRLOG(COLOR_GREEN "%s%s\n" COLOR_OFF, prefix, str);
+}
+
+static void wifi_read_cb(struct gatt_db_attribute *attrib,
+					unsigned int id, uint16_t offset,
+					uint8_t opcode, struct bt_att *att,
+					void *user_data)
+{
+	struct server *server = user_data;
+	uint8_t error = 0;
+	size_t len = 0;
+	const uint8_t *value = NULL;
+
+	printf("wifi_read_cb called: offset: %d\n", offset);
+
+	len = 5;
+	value = "hello";
+
+done:
+	gatt_db_attribute_read_result(attrib, id, error, value, len);
+}
+
+static void wifi_write_cb(struct gatt_db_attribute *attrib,
+					unsigned int id, uint16_t offset,
+					const uint8_t *value, size_t len,
+					uint8_t opcode, struct bt_att *att,
+					void *user_data)
+{
+	struct server *server = user_data;
+	uint8_t error = 0;
+	uint8_t val[10];
+
+
+	printf("wifi_write_cb called: offset: %d\n", offset);
+
+	if (value) {
+		memset(val, 0, 10);
+		memcpy(val + offset, value, len);
+		printf("value: %s\n", val);
+	}
+
+done:
+	gatt_db_attribute_write_result(attrib, id, error);
+
+	printf("server: %p\n", server);
+	bt_gatt_server_send_notification(server->gatt,
+						server->wifi_chr_handle,
+						"notify", 6, false);
 }
 
 static void gap_device_name_read_cb(struct gatt_db_attribute *attrib,
@@ -398,6 +474,57 @@ static void confirm_write(struct gatt_db_attribute *attr, int err,
 	exit(1);
 }
 
+static void wifi_chngd_ccc_read_cb(struct gatt_db_attribute *attrib,
+					unsigned int id, uint16_t offset,
+					uint8_t opcode, struct bt_att *att,
+					void *user_data)
+{
+	struct server *server = user_data;
+	uint8_t value[2];
+
+	PRLOG("Wifi: Service Changed CCC Read called\n");
+
+	value[0] = server->wifi_chngd_enabled ? 0x02 : 0x00;
+	value[1] = 0x00;
+
+	gatt_db_attribute_read_result(attrib, id, 0, value, sizeof(value));
+}
+
+static void wifi_chngd_ccc_write_cb(struct gatt_db_attribute *attrib,
+					unsigned int id, uint16_t offset,
+					const uint8_t *value, size_t len,
+					uint8_t opcode, struct bt_att *att,
+					void *user_data)
+{
+	struct server *server = user_data;
+	uint8_t ecode = 0;
+
+	PRLOG("Wifi: Service Changed CCC Write called [%d:%d]\n", value[0], value[1]);
+
+	if (!value || len != 2) {
+		ecode = BT_ATT_ERROR_INVALID_ATTRIBUTE_VALUE_LEN;
+		goto done;
+	}
+
+	if (offset) {
+		ecode = BT_ATT_ERROR_INVALID_OFFSET;
+		goto done;
+	}
+
+	if (value[0] == 0x00)
+		server->wifi_chngd_enabled = false;
+	else if (value[0] == 0x01)
+		server->wifi_chngd_enabled = true;
+	else
+		ecode = 0x80;
+
+	PRLOG("Wifi: Service Changed Enabled: %s\n",
+				server->wifi_chngd_enabled ? "true" : "false");
+
+done:
+	gatt_db_attribute_write_result(attrib, id, ecode);
+}
+
 static void populate_gap_service(struct server *server)
 {
 	bt_uuid_t uuid;
@@ -527,11 +654,42 @@ static void populate_hr_service(struct server *server)
 		gatt_db_service_set_active(service, true);
 }
 
+static void populate_wifi_service(struct server *server)
+{
+	bt_uuid_t uuid;
+	struct gatt_db_attribute *service, *wifi;
+
+	printf("populate_wifi_service\n");
+
+	/* Add Wifi Service */
+	bt_uuid16_create(&uuid, UUID_WIFI);
+	service = gatt_db_add_service(server->db, &uuid, true, 8);
+	server->wifi_handle = gatt_db_attribute_get_handle(service);
+
+	/* Add Wifi Characteristic */
+	bt_uuid16_create(&uuid, UUID_WIFI_CHR);
+	wifi = gatt_db_service_add_characteristic(service, &uuid,
+						BT_ATT_PERM_READ | BT_ATT_PERM_WRITE,
+						BT_GATT_CHRC_PROP_READ |
+						BT_GATT_CHRC_PROP_WRITE |
+						BT_GATT_CHRC_PROP_NOTIFY,
+						wifi_read_cb, wifi_write_cb, server);
+	server->wifi_chr_handle = gatt_db_attribute_get_handle(wifi);
+
+	bt_uuid16_create(&uuid, GATT_CLIENT_CHARAC_CFG_UUID);
+	gatt_db_service_add_descriptor(service, &uuid,
+					BT_ATT_PERM_READ | BT_ATT_PERM_WRITE,
+					wifi_chngd_ccc_read_cb,
+					wifi_chngd_ccc_write_cb, server);
+
+	gatt_db_service_set_active(service, true);
+}
+
 static void populate_db(struct server *server)
 {
 	populate_gap_service(server);
 	populate_gatt_service(server);
-	populate_hr_service(server);
+	populate_wifi_service(server);
 }
 
 static struct server *server_create(int fd, uint16_t mtu, bool hr_visible)
@@ -1130,6 +1288,596 @@ static void signal_cb(int signum, void *user_data)
 	}
 }
 
+static void index_added(uint16_t index, uint16_t len,
+				const void *param, void *user_data)
+{
+	print("hci%u added", index);
+}
+
+static void index_removed(uint16_t index, uint16_t len,
+				const void *param, void *user_data)
+{
+	print("hci%u removed", index);
+}
+static const char *typestr(uint8_t type)
+{
+	static const char *str[] = { "BR/EDR", "LE Public", "LE Random" };
+
+	if (type <= BDADDR_LE_RANDOM)
+		return str[type];
+
+	return "(unknown)";
+}
+
+static void connected(uint16_t index, uint16_t len, const void *param,
+							void *user_data)
+{
+	const struct mgmt_ev_device_connected *ev = param;
+	uint16_t eir_len;
+	char addr[18];
+
+	if (len < sizeof(*ev)) {
+		error("Invalid connected event length (%u bytes)", len);
+		return;
+	}
+
+	eir_len = get_le16(&ev->eir_len);
+	if (len != sizeof(*ev) + eir_len) {
+		error("Invalid connected event length (%u != eir_len %u)",
+								len, eir_len);
+		return;
+	}
+
+	ba2str(&ev->addr.bdaddr, addr);
+	print("hci%u %s type %s connected eir_len %u", index, addr,
+					typestr(ev->addr.type), eir_len);
+}
+
+static void disconnected(uint16_t index, uint16_t len, const void *param,
+							void *user_data)
+{
+	const struct mgmt_ev_device_disconnected *ev = param;
+	char addr[18];
+	uint8_t reason;
+
+	if (len < sizeof(struct mgmt_addr_info)) {
+		error("Invalid disconnected event length (%u bytes)", len);
+		return;
+	}
+
+	if (len < sizeof(*ev))
+		reason = MGMT_DEV_DISCONN_UNKNOWN;
+	else
+		reason = ev->reason;
+
+	ba2str(&ev->addr.bdaddr, addr);
+	print("hci%u %s type %s disconnected with reason %u",
+			index, addr, typestr(ev->addr.type), reason);
+}
+
+static void conn_failed(uint16_t index, uint16_t len, const void *param,
+							void *user_data)
+{
+	const struct mgmt_ev_connect_failed *ev = param;
+	char addr[18];
+
+	if (len != sizeof(*ev)) {
+		error("Invalid connect_failed event length (%u bytes)", len);
+		return;
+	}
+
+	ba2str(&ev->addr.bdaddr, addr);
+	print("hci%u %s type %s connect failed (status 0x%02x, %s)",
+			index, addr, typestr(ev->addr.type), ev->status,
+			mgmt_errstr(ev->status));
+}
+static const char *settings_str[] = {
+				"powered",
+				"connectable",
+				"fast-connectable",
+				"discoverable",
+				"bondable",
+				"link-security",
+				"ssp",
+				"br/edr",
+				"hs",
+				"le",
+				"advertising",
+				"secure-conn",
+				"debug-keys",
+				"privacy",
+				"configuration",
+				"static-addr",
+				"phy-configuration",
+				"wide-band-speech",
+				"cis-central",
+				"cis-peripheral",
+				"iso-broadcaster",
+				"sync-receiver"
+};
+
+static const char *settings2str(uint32_t settings)
+{
+	static char str[256];
+	unsigned i;
+	int off;
+
+	off = 0;
+	str[0] = '\0';
+
+	for (i = 0; i < NELEM(settings_str); i++) {
+		if ((settings & (1 << i)) != 0)
+			off += snprintf(str + off, sizeof(str) - off, "%s ",
+							settings_str[i]);
+	}
+
+	return str;
+}
+
+static void new_settings(uint16_t index, uint16_t len,
+					const void *param, void *user_data)
+{
+	const uint32_t *ev = param;
+
+	if (len < sizeof(*ev)) {
+		error("Too short new_settings event (%u)", len);
+		return;
+	}
+
+	print("hci%u new_settings: %s", index, settings2str(get_le32(ev)));
+}
+
+static void flags_changed(uint16_t index, uint16_t len, const void *param,
+							void *user_data)
+{
+	const struct mgmt_ev_device_flags_changed *ev = param;
+	char addr[18];
+
+	if (len < sizeof(*ev)) {
+		error("Too small (%u bytes) %s event", len, __func__);
+		return;
+	}
+
+	ba2str(&ev->addr.bdaddr, addr);
+	print("hci%u device_flags_changed: %s (%s)", index, addr,
+							typestr(ev->addr.type));
+	print("     supp: 0x%08x  curr: 0x%08x",
+					ev->supported_flags, ev->current_flags);
+}
+
+static void mgmt_debug(const char *str, void *user_data)
+{
+	const char *prefix = user_data;
+
+	print("%s%s", prefix, str);
+}
+static void advertising_added(uint16_t index, uint16_t len,
+					const void *param, void *user_data)
+{
+	const struct mgmt_ev_advertising_added *ev = param;
+
+	if (len < sizeof(*ev)) {
+		error("Too small (%u bytes) advertising_added event", len);
+		return;
+	}
+
+	print("hci%u advertising_added: instance %u", index, ev->instance);
+}
+
+static void advertising_removed(uint16_t index, uint16_t len,
+					const void *param, void *user_data)
+{
+	const struct mgmt_ev_advertising_removed *ev = param;
+
+	if (len < sizeof(*ev)) {
+		error("Too small (%u bytes) advertising_removed event", len);
+		return;
+	}
+
+	print("hci%u advertising_removed: instance %u", index, ev->instance);
+}
+
+static void confirm_rsp(uint8_t status, uint16_t len, const void *param,
+							void *user_data)
+{
+	if (status != 0) {
+		error("User Confirm reply failed. status 0x%02x (%s)",
+						status, mgmt_errstr(status));
+	}
+
+	print("User Confirm Reply successful");
+}
+
+
+static int mgmt_confirm_reply(uint16_t index, const struct mgmt_addr_info *addr)
+{
+	struct mgmt_cp_user_confirm_reply cp;
+
+	memset(&cp, 0, sizeof(cp));
+	memcpy(&cp.addr, addr, sizeof(*addr));
+
+	return mgmt_reply(mgmt, MGMT_OP_USER_CONFIRM_REPLY, index,
+				sizeof(cp), &cp, confirm_rsp, NULL, NULL);
+}
+
+static void user_confirm(uint16_t index, uint16_t len, const void *param,
+							void *user_data)
+{
+	const struct mgmt_ev_user_confirm_request *ev = param;
+	uint32_t val;
+	char addr[18];
+
+	if (len != sizeof(*ev)) {
+		error("Invalid user_confirm request length (%u)", len);
+		return;
+	}
+
+	ba2str(&ev->addr.bdaddr, addr);
+	val = get_le32(&ev->value);
+
+	print("hci%u %s User Confirm %06u hint %u", index, addr,
+							val, ev->confirm_hint);
+
+	if (ev->confirm_hint) {
+		print("Accept pairing with %s yes", addr);
+		mgmt_confirm_reply(index, &ev->addr);
+	} else {
+		print("Confirm value %06u for %s (yes/no)", val, addr);
+		mgmt_confirm_reply(index, &ev->addr);
+	}
+}
+
+static void register_mgmt_callbacks(struct mgmt *mgmt, uint16_t index)
+{
+	mgmt_register(mgmt, MGMT_EV_INDEX_ADDED, index, index_added,
+								NULL, NULL);
+	mgmt_register(mgmt, MGMT_EV_INDEX_REMOVED, index, index_removed,
+								NULL, NULL);
+	mgmt_register(mgmt, MGMT_EV_NEW_SETTINGS, index, new_settings,
+								NULL, NULL);
+	mgmt_register(mgmt, MGMT_EV_DEVICE_CONNECTED, index, connected,
+								NULL, NULL);
+	mgmt_register(mgmt, MGMT_EV_DEVICE_DISCONNECTED, index, disconnected,
+								NULL, NULL);
+	mgmt_register(mgmt, MGMT_EV_CONNECT_FAILED, index, conn_failed,
+								NULL, NULL);
+	mgmt_register(mgmt, MGMT_EV_ADVERTISING_ADDED, index,
+						advertising_added, NULL, NULL);
+	mgmt_register(mgmt, MGMT_EV_ADVERTISING_REMOVED, index,
+					advertising_removed, NULL, NULL);
+	mgmt_register(mgmt, MGMT_EV_DEVICE_FLAGS_CHANGED, index,
+					flags_changed, NULL, NULL);
+	mgmt_register(mgmt, MGMT_EV_USER_CONFIRM_REQUEST, index, user_confirm,
+							mgmt, NULL);
+}
+
+/* Wrapper to get the index and opcode to the response callback */
+struct command_data {
+	uint16_t id;
+	uint16_t op;
+	void (*callback) (uint16_t id, uint16_t op, uint8_t status,
+					uint16_t len, const void *param);
+};
+
+static void cmd_rsp(uint8_t status, uint16_t len, const void *param,
+							void *user_data)
+{
+	struct command_data *data = user_data;
+	printf("cmd_rsp\n");
+
+	data->callback(data->op, data->id, status, len, param);
+}
+
+static unsigned int send_cmd(struct mgmt *mgmt, uint16_t op, uint16_t id,
+				uint16_t len, const void *param,
+				void (*cb)(uint16_t id, uint16_t op,
+						uint8_t status, uint16_t len,
+						const void *param))
+{
+	struct command_data *data;
+	unsigned int send_id;
+
+	data = new0(struct command_data, 1);
+	if (!data)
+		return 0;
+
+	data->id = id;
+	data->op = op;
+	data->callback = cb;
+
+	send_id = mgmt_send(mgmt, op, id, len, param, cmd_rsp, data, free);
+	if (send_id == 0)
+		free(data);
+
+	return send_id;
+}
+
+static void cmd_add_adv(void);
+static void cmd_rm_adv(void);
+static void cmd_setting(uint16_t op, uint8_t val);
+
+static void *adv_thread_func(void *arg)
+{
+	cmd_add_adv();
+	return NULL;
+}
+
+static void setting_rsp(uint16_t op, uint16_t id, uint8_t status, uint16_t len,
+							const void *param)
+{
+	const uint32_t *rp = param;
+
+	if (status != 0) {
+		error("%s for hci%u failed with status 0x%02x (%s)",
+			mgmt_opstr(op), id, status, mgmt_errstr(status));
+		goto done;
+	}
+
+	if (len < sizeof(*rp)) {
+		error("Too small %s response (%u bytes)",
+							mgmt_opstr(op), len);
+		goto done;
+	}
+
+	print("hci%u %s:%d complete, settings: %s", id, mgmt_opstr(op), op,
+						settings2str(get_le32(rp)));
+
+	/*
+	if (op == MGMT_OP_SET_LE) {
+		cmd_add_adv();
+		//pthread_t adv_thread;
+		//pthread_create(&adv_thread, NULL, adv_thread_func, NULL);
+	} else if (op == MGMT_OP_SET_POWERED) {
+		cmd_setting(MGMT_OP_SET_LE, 1);
+	}
+	*/
+
+done:
+	return;
+}
+
+static void cmd_setting(uint16_t op, uint8_t val)
+{
+	int index;
+
+	index = mgmt_index;
+	if (index == MGMT_INDEX_NONE)
+		index = 0;
+
+	if (send_cmd(mgmt, op, index, sizeof(val), &val, setting_rsp) == 0) {
+		error("Unable to send %s cmd", mgmt_opstr(op));
+		return;
+	} else {
+		printf("send %s cmd ok\n", mgmt_opstr(op));
+	}
+}
+
+static bool parse_bytes(char *optarg, uint8_t **bytes, size_t *len)
+{
+	unsigned i;
+
+	*len = strlen(optarg);
+
+	if (*len % 2) {
+		error("Malformed data");
+		return false;
+	}
+
+	*len /= 2;
+	if (*len > UINT8_MAX) {
+		error("Data too long");
+		return false;
+	}
+
+	*bytes = malloc(*len);
+	if (!*bytes) {
+		error("Failed to allocate memory");
+		return false;
+	}
+
+	for (i = 0; i < *len; i++) {
+		if (sscanf(optarg + (i * 2), "%2hhx", *bytes + i) != 1) {
+			error("Invalid data");
+			free(*bytes);
+			*bytes = NULL;
+			return false;
+		}
+	}
+
+	return true;
+}
+
+static void add_adv_rsp(uint8_t status, uint16_t len, const void *param,
+								void *user_data)
+{
+	const struct mgmt_rp_add_advertising *rp = param;
+
+	if (status != 0) {
+		error("Add Advertising failed with status 0x%02x (%s)",
+						status, mgmt_errstr(status));
+		return;
+	}
+
+	if (len != sizeof(*rp)) {
+		error("Invalid Add Advertising response length (%u)", len);
+		return;
+	}
+
+	print("Instance added: %u", rp->instance);
+
+	return;
+}
+
+static void rm_adv_rsp(uint8_t status, uint16_t len, const void *param,
+								void *user_data)
+{
+	const struct mgmt_rp_remove_advertising *rp = param;
+
+	if (status != 0) {
+		error("Remove Advertising failed with status 0x%02x (%s)",
+						status, mgmt_errstr(status));
+	}
+
+	if (len != sizeof(*rp)) {
+		error("Invalid Remove Advertising response length (%u)", len);
+	}
+
+	print("Instance removed: %u", rp->instance);
+}
+
+static void cmd_rm_adv()
+{
+	struct mgmt_cp_remove_advertising cp;
+	uint8_t instance;
+	uint16_t index;
+
+	instance = 1;
+
+	index = mgmt_index;
+	if (index == MGMT_INDEX_NONE)
+		index = 0;
+
+	memset(&cp, 0, sizeof(cp));
+
+	cp.instance = instance;
+
+	if (!mgmt_send(mgmt, MGMT_OP_REMOVE_ADVERTISING, index, sizeof(cp), &cp,
+						rm_adv_rsp, NULL, NULL)) {
+		error("Unable to send \"Remove Advertising\" command");
+	}
+}
+
+static void io_cap_rsp(uint8_t status, uint16_t len, const void *param,
+							void *user_data)
+{
+	if (status != 0)
+		error("Could not set IO Capability with status 0x%02x (%s)",
+						status, mgmt_errstr(status));
+	else
+		print("IO Capabilities successfully set");
+
+}
+
+static void cmd_io_cap(void)
+{
+	struct mgmt_cp_set_io_capability cp;
+	uint8_t cap;
+	uint16_t index;
+
+	index = mgmt_index;
+	if (index == MGMT_INDEX_NONE)
+		index = 0;
+
+	cap = 3;
+	memset(&cp, 0, sizeof(cp));
+	cp.io_capability = cap;
+
+	if (mgmt_send(mgmt, MGMT_OP_SET_IO_CAPABILITY, index, sizeof(cp), &cp,
+					io_cap_rsp, NULL, NULL) == 0) {
+		error("Unable to send set-io-cap cmd");
+	}
+}
+
+#define MAX_AD_UUID_BYTES 32
+static void cmd_add_adv(void)
+{
+	struct mgmt_cp_add_advertising *cp = NULL;
+	int opt;
+	uint8_t *adv_data = NULL, *scan_rsp = NULL;
+	size_t adv_len = 0, scan_rsp_len = 0;
+	size_t cp_len;
+	uint8_t uuids[MAX_AD_UUID_BYTES];
+	size_t uuid_bytes = 0;
+	uint8_t uuid_type = 0;
+	uint16_t timeout = 0, duration = 0;
+	uint8_t instance;
+	bt_uuid_t uuid;
+	bool success = false;
+	bool quit = true;
+	uint32_t flags = 0;
+	uint16_t index;
+
+	printf("cmd_add_adv\n");
+
+	//add-adv -u 180d -u 180f -d 080954657374204C45 1
+
+	if (bt_string_to_uuid(&uuid, "180d") < 0) {
+		print("Invalid UUID: %s", optarg);
+		goto done;
+	}
+
+	bt_uuid_to_le(&uuid, uuids + uuid_bytes);
+	uuid_bytes += 2;
+
+	if (!uuid_type)
+		uuid_type = uuid.type;
+
+	if (!parse_bytes("080954657374204C45", &adv_data, &adv_len))
+		goto done;
+
+	if (uuid_bytes)
+		uuid_bytes += 2;
+
+	instance = 1;
+
+	index = 0;
+
+	cp_len = sizeof(*cp) + uuid_bytes + adv_len + scan_rsp_len;
+	cp = malloc0(cp_len);
+	if (!cp)
+		goto done;
+
+	cp->instance = instance;
+
+	flags = MGMT_ADV_FLAG_CONNECTABLE | MGMT_ADV_FLAG_DISCOV;
+	put_le32(flags, &cp->flags);
+	
+	put_le16(timeout, &cp->timeout);
+	
+	put_le16(duration, &cp->duration);
+
+	cp->adv_data_len = adv_len + uuid_bytes;
+	cp->scan_rsp_len = scan_rsp_len;
+
+	uuid_bytes = 0;
+
+	if (uuid_bytes) {
+		cp->data[0] = uuid_bytes - 1;
+		cp->data[1] = uuid_type == SDP_UUID16 ? 0x03 : 0x07;
+		memcpy(cp->data + 2, uuids, uuid_bytes - 2);
+	}
+
+	if (adv_len)
+		memcpy(cp->data + uuid_bytes, adv_data, adv_len);
+
+	if (scan_rsp_len)
+		memcpy(cp->data + uuid_bytes + adv_len, scan_rsp, scan_rsp_len);
+
+	if (!mgmt_send(mgmt, MGMT_OP_ADD_ADVERTISING, index, cp_len, cp,
+						add_adv_rsp, NULL, NULL)) {
+		error("Unable to send \"Add Advertising\" command");
+		goto done;
+	} else {
+		printf("send Add Advertising command ok\n");
+	}
+
+	quit = false;
+
+done:
+	free(adv_data);
+	free(scan_rsp);
+	free(cp);
+}
+
+static void *mainloop_thread_func(void *arg)
+{
+	printf("mainloop_thread_func\n");
+
+	mainloop_run_with_signal(signal_cb, NULL);
+
+	return NULL;
+}
+
 int main(int argc, char *argv[])
 {
 	int opt;
@@ -1142,79 +1890,21 @@ int main(int argc, char *argv[])
 	bool hr_visible = false;
 	struct server *server;
 
-	while ((opt = getopt_long(argc, argv, "+hvrs:t:m:i:",
-						main_options, NULL)) != -1) {
-		switch (opt) {
-		case 'h':
-			usage();
-			return EXIT_SUCCESS;
-		case 'v':
-			verbose = true;
-			break;
-		case 'r':
-			hr_visible = true;
-			break;
-		case 's':
-			if (strcmp(optarg, "low") == 0)
-				sec = BT_SECURITY_LOW;
-			else if (strcmp(optarg, "medium") == 0)
-				sec = BT_SECURITY_MEDIUM;
-			else if (strcmp(optarg, "high") == 0)
-				sec = BT_SECURITY_HIGH;
-			else {
-				fprintf(stderr, "Invalid security level\n");
-				return EXIT_FAILURE;
-			}
-			break;
-		case 't':
-			if (strcmp(optarg, "random") == 0)
-				src_type = BDADDR_LE_RANDOM;
-			else if (strcmp(optarg, "public") == 0)
-				src_type = BDADDR_LE_PUBLIC;
-			else {
-				fprintf(stderr,
-					"Allowed types: random, public\n");
-				return EXIT_FAILURE;
-			}
-			break;
-		case 'm': {
-			int arg;
-
-			arg = atoi(optarg);
-			if (arg <= 0) {
-				fprintf(stderr, "Invalid MTU: %d\n", arg);
-				return EXIT_FAILURE;
-			}
-
-			if (arg > UINT16_MAX) {
-				fprintf(stderr, "MTU too large: %d\n", arg);
-				return EXIT_FAILURE;
-			}
-
-			mtu = (uint16_t) arg;
-			break;
-		}
-		case 'i':
-			dev_id = hci_devid(optarg);
-			if (dev_id < 0) {
-				perror("Invalid adapter");
-				return EXIT_FAILURE;
-			}
-
-			break;
-		default:
-			fprintf(stderr, "Invalid option: %c\n", opt);
-			return EXIT_FAILURE;
-		}
+	//wait hci0 appear
+	int times = 10;
+	while (times-- > 0 && access("/sys/class/bluetooth/hci0", F_OK)) {
+		printf("wait hci0 appear\n");
+		sleep(1);
 	}
 
-	argc -= optind;
-	argv -= optind;
-	optind = 0;
+	sleep(1);
+	system("hciconfig hci0 up");
+	sleep(1);
 
-	if (argc) {
-		usage();
-		return EXIT_SUCCESS;
+	dev_id = hci_devid("hci0");
+	if (dev_id < 0) {
+		perror("Invalid adapter");
+		return EXIT_FAILURE;
 	}
 
 	if (dev_id == -1)
@@ -1224,13 +1914,53 @@ int main(int argc, char *argv[])
 		return EXIT_FAILURE;
 	}
 
+	mainloop_init();
+
+	mgmt = mgmt_new_default();
+	if (!mgmt) {
+		fprintf(stderr, "Unable to open mgmt_socket\n");
+		return false;
+	}
+
+	if (getenv("MGMT_DEBUG"))
+		mgmt_set_debug(mgmt, mgmt_debug, "mgmt: ", NULL);
+
+	register_mgmt_callbacks(mgmt, mgmt_index);
+
+	printf("register_mgmt_callbacks ok\n");
+
+	pthread_t mainloop_thread;
+	pthread_create(&mainloop_thread, NULL, mainloop_thread_func, NULL);
+
+	sleep(1);
+
+	cmd_setting(MGMT_OP_SET_POWERED, 0);
+
+	sleep(1);
+
+	cmd_setting(MGMT_OP_SET_POWERED, 1);
+
+	sleep(1);
+
+	cmd_setting(MGMT_OP_SET_BONDABLE, 1);
+
+	sleep(1);
+
+	cmd_io_cap();
+
+	sleep(1);
+
+	cmd_setting(MGMT_OP_SET_LE, 1);
+
+	sleep(1);
+
+	cmd_add_adv();
+
 	fd = l2cap_le_att_listen_and_accept(&src_addr, sec, src_type);
 	if (fd < 0) {
 		fprintf(stderr, "Failed to accept L2CAP ATT connection\n");
 		return EXIT_FAILURE;
 	}
-
-	mainloop_init();
 
 	server = server_create(fd, mtu, hr_visible);
 	if (!server) {
@@ -1249,9 +1979,11 @@ int main(int argc, char *argv[])
 
 	printf("Running GATT server\n");
 
-	print_prompt();
+	while (1)
+		sleep(1);
+	//print_prompt();
 
-	mainloop_run_with_signal(signal_cb, NULL);
+	//mainloop_run_with_signal(signal_cb, NULL);
 
 	printf("\n\nShutting down...\n");
 
